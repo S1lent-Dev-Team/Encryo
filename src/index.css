@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+@theme {
+  /* dezente, neutrale Dark-Palette + ein einziger Akzent (Emerald) */
+  --color-ink: #0a0b0d;
+  --color-panel: #111317;
+  --color-panel-2: #181b20;
+  --color-line: #23262d;
+  --color-line-2: #2e323a;
+  --color-brand: #34d399; /* primärer Akzent, sparsam eingesetzt */
+  --color-brand-2: #22d3ee; /* zweiter Ton nur für feine Gradienten (Logo/1 Wort) */
+  --color-brand-soft: #1e3a32;
+  --color-accent: #34d399;
+  --color-danger: #e06a6f;
+  --color-text: #e6e7ea;
+  --color-muted: #888f98;
+  --color-faint: #5b616b;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  /* sehr feines Punkt-Grid für Textur — kaum sichtbar, nimmt die Leere */
+  background-color: var(--color-ink);
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    rgba(255, 255, 255, 0.025) 1px,
+    transparent 0
+  );
+  background-size: 22px 22px;
+  color: var(--color-text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-brand) 30%, transparent);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-2) transparent;
+}
+
+/* sehr subtiler, einmaliger Lichtschein oben – nicht der typische bunte AI-Verlauf */
+.app-glow::before {
+  content: "";
+  position: fixed;
+  inset: -20% 0 auto 0;
+  height: 340px;
+  background: radial-gradient(
+    620px 220px at 50% 0,
+    color-mix(in oklab, var(--color-brand) 10%, transparent),
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* feiner Gradient-Text für EIN einzelnes Wort (sparsam!) */
+.text-gradient {
+  background: linear-gradient(110deg, var(--color-brand), var(--color-brand-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* dezente Entrance-Animation für Karten/Inhalte */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-in {
+  animation: fadeInUp 0.4s cubic-bezier(0.21, 0.6, 0.35, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-in {
+    animation: none;
+  }
+}
