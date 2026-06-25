@@ -254,6 +254,8 @@ export const Icon = {
   moon: make(<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />),
   chevronUp: make(<path d="m6 15 6-6 6 6" />),
   chevronDown: make(<path d="m6 9 6 6 6-6" />),
+  chevronLeft: make(<path d="m15 6-6 6 6 6" />),
+  chevronRight: make(<path d="m9 6 6 6-6 6" />),
   pencil: make(<><path d="M4 20h4l10-10-4-4L4 16v4Z" /><path d="m13.5 6.5 4 4" /></>),
   terminal: make(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>),
   dots: make(

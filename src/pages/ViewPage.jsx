@@ -13,7 +13,7 @@ import {
 import { parseFragment } from "../lib/link.js";
 import { getRecoveryKey, setRecoveryKey, getRecoverySalt } from "../lib/recovery.js";
 import { useCurrentUser } from "../lib/useAuth.js";
-import { formatBytes } from "../lib/format.js";
+import { formatBytes, formatDate } from "../lib/format.js";
 import { useI18n } from "../lib/i18n.js";
 
 // Macht aus beliebiger Nutzereingabe das rohe Key-Fragment: akzeptiert den rohen
@@ -45,6 +45,7 @@ export default function ViewPage() {
   const [files, setFiles] = useState([]);
   const [viewCount, setViewCount] = useState(0);
   const [decProgress, setDecProgress] = useState({ done: 0, total: 0 });
+  const [downloadPct, setDownloadPct] = useState(0);
   const urlsRef = useRef([]);
   const autoTried = useRef(false);
 
@@ -127,7 +128,11 @@ export default function ViewPage() {
 
     try {
       setPhase("opening");
-      const res = await openLink(id);
+      setDownloadPct(0);
+      setDecProgress({ done: 0, total: 0 });
+      const res = await openLink(id, (loaded, total) =>
+        setDownloadPct(total ? loaded / total : 0)
+      );
       if (!res.ok) {
         setGoneReason(res.reason);
         setPhase("gone");
@@ -205,32 +210,38 @@ export default function ViewPage() {
         </div>
       </Centered>
     );
-  if (phase === "opening")
+  if (phase === "opening") {
+    const downloading = decProgress.total === 0; // erst laden, dann entschlüsseln
+    const pct = downloading ? downloadPct * 100 : (decProgress.done / decProgress.total) * 100;
     return (
       <Centered>
         <div className="w-full max-w-xs">
           <div className="mb-3 flex items-center gap-3 text-muted">
-            <Spinner size={18} /> {t("view.decrypting")}
+            <Spinner size={18} />{" "}
+            {downloading ? t("view.downloading", { pct: Math.round(downloadPct * 100) }) : t("view.decrypting")}
           </div>
-          {decProgress.total > 1 && (
+          {(downloading ? downloadPct > 0 : decProgress.total > 1) && (
             <>
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-line-2">
                 <div
                   className="h-full rounded-full bg-brand transition-all"
-                  style={{ width: `${(decProgress.done / decProgress.total) * 100}%` }}
+                  style={{ width: `${pct}%` }}
                 />
               </div>
-              <p className="mt-1 text-center text-xs text-muted">
-                {t("opened.decryptProgress", {
-                  done: decProgress.done,
-                  total: decProgress.total,
-                })}
-              </p>
+              {!downloading && (
+                <p className="mt-1 text-center text-xs text-muted">
+                  {t("opened.decryptProgress", {
+                    done: decProgress.done,
+                    total: decProgress.total,
+                  })}
+                </p>
+              )}
             </>
           )}
         </div>
       </Centered>
     );
+  }
   if (phase === "gone") return <GoneView reason={goneReason} />;
   if (phase === "opened")
     return <OpenedView files={files} meta={meta} viewCount={viewCount} toast={toast} />;
@@ -475,21 +486,44 @@ function TextPreview({ file }) {
   );
 }
 
-function FilePreview({ file, onZoom }) {
+// Gekacheltes, diagonales Wasserzeichen über dem Bild (Abschreckung gegen
+// Screenshots/Weitergabe — kein echter Schutz).
+function Watermark({ text }) {
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 flex flex-wrap content-center justify-center gap-x-10 gap-y-8 overflow-hidden -rotate-[24deg] select-none"
+    >
+      {Array.from({ length: 80 }).map((_, i) => (
+        <span key={i} className="whitespace-nowrap text-xs font-semibold text-white/40">
+          {text}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function FilePreview({ file, onZoom, protect, watermark }) {
   const { t } = useI18n();
   const m = file.mimetype || "";
+  const noSave = protect
+    ? { onContextMenu: (e) => e.preventDefault(), draggable: false }
+    : {};
   if (m.startsWith("image/"))
     return (
       <button
         onClick={onZoom}
+        onContextMenu={protect ? (e) => e.preventDefault() : undefined}
         className="group relative block w-full cursor-zoom-in"
         title={t("preview.zoom")}
       >
         <img
           src={file.url}
           alt={file.filename}
+          {...noSave}
           className="max-h-[440px] w-full bg-panel-2 object-contain"
         />
+        {protect && <Watermark text={watermark} />}
         <span className="absolute right-2 top-2 rounded-md bg-black/50 p-1.5 text-white opacity-0 transition-opacity group-hover:opacity-100">
           <Icon.expand size={14} />
         </span>
@@ -512,26 +546,62 @@ function FilePreview({ file, onZoom }) {
 }
 
 function OpenedView({ files, meta, viewCount, toast }) {
-  const { t } = useI18n();
-  const [lightbox, setLightbox] = useState(null);
+  const { t, lang } = useI18n();
+  const [lightIdx, setLightIdx] = useState(null);
   const [zipping, setZipping] = useState(false);
+  const [obscured, setObscured] = useState(false);
   const lightboxRef = useRef(null);
+  const images = files.filter((f) => f.isImage);
+  const lightOpen = lightIdx != null;
+  const protect = !!meta.protected;
+  const watermark = t("protect.watermark", { date: formatDate(Date.now(), lang) });
 
-  // Lightbox: Fokus hinein, Esc schließt, Tab bleibt gefangen, Fokus zurück.
+  // Ansichtsschutz: Inhalt verbergen, wenn das Fenster den Fokus verliert
+  // (erschwert Hintergrund-/Alt-Tab-Aufnahmen). Kein echter Schutz.
   useEffect(() => {
-    if (!lightbox) return;
+    if (!protect) return;
+    const update = () => setObscured(document.hidden);
+    const hide = () => setObscured(true);
+    const show = () => setObscured(false);
+    document.addEventListener("visibilitychange", update);
+    window.addEventListener("blur", hide);
+    window.addEventListener("focus", show);
+    return () => {
+      document.removeEventListener("visibilitychange", update);
+      window.removeEventListener("blur", hide);
+      window.removeEventListener("focus", show);
+    };
+  }, [protect]);
+
+  // Lightbox-Galerie: Fokus rein, Esc schließt, ◀ ▶ blättern, Tab gefangen.
+  useEffect(() => {
+    if (!lightOpen) return;
     const prev = document.activeElement;
     lightboxRef.current?.focus();
     function onKey(e) {
-      if (e.key === "Escape") setLightbox(null);
+      if (e.key === "Escape") setLightIdx(null);
       else if (e.key === "Tab") e.preventDefault();
+      else if (e.key === "ArrowLeft") setLightIdx((i) => (i + images.length - 1) % images.length);
+      else if (e.key === "ArrowRight") setLightIdx((i) => (i + 1) % images.length);
     }
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
       prev?.focus?.();
     };
-  }, [lightbox]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lightOpen]);
+
+  async function copyImage(file) {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({ [file.blob.type || "image/png"]: file.blob }),
+      ]);
+      toast?.(t("opened.imgCopied"));
+    } catch {
+      toast?.(t("opened.imgCopyFail"), "error");
+    }
+  }
 
   async function downloadZip() {
     setZipping(true);
@@ -552,7 +622,10 @@ function OpenedView({ files, meta, viewCount, toast }) {
   const fileWord = t(files.length === 1 ? "common.file.one" : "common.file.other");
 
   return (
-    <div className="mx-auto max-w-2xl">
+    <div
+      className={"mx-auto max-w-2xl " + (protect ? "select-none" : "")}
+      onContextMenu={protect ? (e) => e.preventDefault() : undefined}
+    >
       <div className="mb-5 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-line bg-panel-2 text-brand">
@@ -566,10 +639,15 @@ function OpenedView({ files, meta, viewCount, toast }) {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {files.length > 1 && (
+          {files.length > 1 && !protect && (
             <Button variant="outline" onClick={downloadZip} disabled={zipping}>
               {zipping ? <Spinner /> : <Icon.download />} {t("opened.zip")}
             </Button>
+          )}
+          {protect && (
+            <Badge tone="brand">
+              <Icon.shield /> {t("badge.protected")}
+            </Badge>
           )}
           {meta.oneTime && (
             <Badge tone="danger">
@@ -578,6 +656,12 @@ function OpenedView({ files, meta, viewCount, toast }) {
           )}
         </div>
       </div>
+
+      {protect && (
+        <div className="mb-4 rounded-lg border border-yellow-500/25 bg-yellow-500/10 px-3 py-2.5 text-sm text-yellow-200/90">
+          {t("opened.protectNote")}
+        </div>
+      )}
 
       {meta.oneTime && (
         <div className="mb-4 rounded-lg border border-danger/25 bg-danger/10 px-3 py-2.5 text-sm text-danger">
@@ -588,7 +672,12 @@ function OpenedView({ files, meta, viewCount, toast }) {
       <div className="space-y-3">
         {files.map((f, i) => (
           <Card key={i} className="overflow-hidden">
-            <FilePreview file={f} onZoom={() => setLightbox(f.url)} />
+            <FilePreview
+              file={f}
+              onZoom={() => setLightIdx(images.indexOf(f))}
+              protect={protect}
+              watermark={watermark}
+            />
             <div className="flex items-center gap-3 p-3.5">
               <span className="text-faint">
                 {f.isImage ? <Icon.image /> : <Icon.file />}
@@ -601,9 +690,11 @@ function OpenedView({ files, meta, viewCount, toast }) {
                   {formatBytes(f.size)} · {f.mimetype}
                 </p>
               </div>
-              <Button variant="outline" onClick={() => downloadBlob(f.blob, f.filename)}>
-                <Icon.download /> {t("opened.download")}
-              </Button>
+              {!protect && (
+                <Button variant="outline" onClick={() => downloadBlob(f.blob, f.filename)}>
+                  <Icon.download /> {t("opened.download")}
+                </Button>
+              )}
             </div>
           </Card>
         ))}
@@ -615,21 +706,91 @@ function OpenedView({ files, meta, viewCount, toast }) {
         </Link>
       </div>
 
-      {lightbox && (
+      {lightOpen && (
         <div
           ref={lightboxRef}
           tabIndex={-1}
           role="dialog"
           aria-modal="true"
           aria-label={t("preview.zoom")}
-          onClick={() => setLightbox(null)}
-          className="fixed inset-0 z-50 flex cursor-zoom-out items-center justify-center bg-black/80 p-6 outline-none backdrop-blur-sm"
+          onClick={() => setLightIdx(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6 outline-none backdrop-blur-sm"
         >
-          <img
-            src={lightbox}
-            alt=""
-            className="max-h-full max-w-full rounded-lg object-contain"
-          />
+          <div className="relative" onClick={(e) => e.stopPropagation()}>
+            <img
+              src={images[lightIdx].url}
+              alt={images[lightIdx].filename}
+              draggable={protect ? false : undefined}
+              onContextMenu={protect ? (e) => e.preventDefault() : undefined}
+              className="max-h-[85vh] max-w-full rounded-lg object-contain"
+            />
+            {protect && <Watermark text={watermark} />}
+          </div>
+
+          {/* Steuerleiste oben rechts */}
+          <div
+            className="absolute right-3 top-3 flex items-center gap-2"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {images.length > 1 && (
+              <span className="rounded-md bg-black/50 px-2 py-1 text-xs text-white">
+                {lightIdx + 1}/{images.length}
+              </span>
+            )}
+            {!protect && (
+              <button
+                onClick={() => copyImage(images[lightIdx])}
+                title={t("opened.copyImage")}
+                aria-label={t("opened.copyImage")}
+                className="rounded-md bg-black/50 p-2 text-white transition-colors hover:bg-black/70"
+              >
+                <Icon.copy size={16} />
+              </button>
+            )}
+            <button
+              onClick={() => setLightIdx(null)}
+              aria-label={t("common.close")}
+              className="rounded-md bg-black/50 p-2 text-white transition-colors hover:bg-black/70"
+            >
+              <Icon.x size={16} />
+            </button>
+          </div>
+
+          {/* Blättern */}
+          {images.length > 1 && (
+            <>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setLightIdx((i) => (i + images.length - 1) % images.length);
+                }}
+                aria-label={t("opened.prevImage")}
+                className="absolute left-3 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70"
+              >
+                <Icon.chevronLeft size={20} />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setLightIdx((i) => (i + 1) % images.length);
+                }}
+                aria-label={t("opened.nextImage")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70"
+              >
+                <Icon.chevronRight size={20} />
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Ansichtsschutz: Inhalt verbergen, solange das Fenster nicht im Fokus ist */}
+      {protect && obscured && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-ink/95 p-6 text-center backdrop-blur-xl">
+          <div className="flex flex-col items-center gap-2 text-muted">
+            <Icon.shield className="text-brand" size={28} />
+            <p className="text-sm">{t("opened.obscured")}</p>
+          </div>
         </div>
       )}
     </div>

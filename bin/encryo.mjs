@@ -40,6 +40,25 @@ function fail(msg) {
   process.exit(1);
 }
 
+// base64-Zeichen pro Chunk (~6 MB Request) — klein genug für Proxy-Body-Limits.
+const CHUNK = 6 * 1024 * 1024;
+
+async function postJson(url, body, token) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      msg = (await res.json()).error || msg;
+    } catch {}
+    fail(msg);
+  }
+  return res.json();
+}
+
 function parseArgs(argv) {
   const out = { files: [], embed: true };
   for (let i = 0; i < argv.length; i++) {
@@ -80,28 +99,38 @@ async function upload(opts) {
   }
   const verifier = await makeVerifier(key);
 
-  // 3) Upload (nur Ciphertext + Metadaten); Auth per Bearer-Token
-  const res = await fetch(server + "/api/links", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
-    body: JSON.stringify({
-      files,
+  // 3) Gechunkt hochladen (nur Ciphertext + Metadaten); Auth per Bearer-Token.
+  //    Umgeht Body-Limits vorgelagerter Proxys/Tunnel (z.B. 100 MB).
+  const { uploadId } = await postJson(server + "/api/uploads", {}, token);
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    for (let off = 0; off < f.ciphertext.length; off += CHUNK) {
+      await postJson(
+        `${server}/api/uploads/${uploadId}/chunk`,
+        {
+          fileIndex: i,
+          filename: f.filename,
+          size: f.size,
+          mimetype: f.mimetype,
+          iv: f.iv,
+          chunk: f.ciphertext.slice(off, off + CHUNK),
+        },
+        token
+      );
+    }
+  }
+  const { id, expiresAt } = await postJson(
+    `${server}/api/uploads/${uploadId}/complete`,
+    {
       salt,
       verifier,
       oneTime: !!opts.oneTime,
       expiresInHours: Number.isFinite(opts.expire) ? opts.expire : null,
       passwordProtected: !!opts.password,
       maxViews: Number.isInteger(opts.maxViews) ? opts.maxViews : null,
-    }),
-  });
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try {
-      msg = (await res.json()).error || msg;
-    } catch {}
-    fail(msg);
-  }
-  const { id, expiresAt } = await res.json();
+    },
+    token
+  );
 
   // 4) Share-Link bauen (Secret bleibt im #-Fragment, nie am Server)
   let url = `${server}/v/${id}`;

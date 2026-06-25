@@ -31,6 +31,7 @@ const translations = {
     "common.link.one": "Link",
     "common.link.other": "Links",
     "common.never": "Nie",
+    "common.close": "Schließen",
 
     // — Upload —
     "upload.zkBadge": "Zero-Knowledge · Ende-zu-Ende",
@@ -65,6 +66,11 @@ const translations = {
     "upload.preview.warnBold": "unverschlüsselt & öffentlich",
     "upload.preview.warnPost":
       " gespeichert (sichtbar für jeden mit dem Link, auch ohne Schlüssel). Nur aktivieren, wenn das Bild nicht vertraulich ist.",
+    "upload.compress.label": "Bilder komprimieren",
+    "upload.compress.hint": "Große Bilder vor dem Verschlüsseln verkleinern (max. 2560px, JPEG) — spart Speicher & Upload-Zeit.",
+    "upload.protect.label": "Ansichtsschutz",
+    "upload.protect.hint": "Wasserzeichen + kein Download/Rechtsklick beim Empfänger; Verbergen bei Fokusverlust.",
+    "upload.protect.warn": "Kein echter Schutz: Screenshots auf Betriebssystemebene lassen sich technisch nicht verhindern — nur erschweren.",
     "upload.maxViews.label": "Aufrufe begrenzen",
     "upload.maxViews.hint": "Link nach N Öffnungen automatisch sperren",
     "upload.maxViews.placeholder": "z.B. 5",
@@ -85,6 +91,13 @@ const translations = {
     "upload.expiry.7d": "7 Tage",
     "upload.expiry.custom": "Datum",
     "upload.progress": "Verschlüssele {done}/{total} Dateien…",
+    "upload.uploading": "Hochladen… {pct}%",
+    "upload.speedEta": "{speed}/s · noch ~{eta}",
+    "upload.cancel": "Abbrechen",
+    "upload.resume": "Fortsetzen",
+    "upload.discard": "Verwerfen",
+    "upload.cancelled": "Upload abgebrochen — du kannst fortsetzen oder verwerfen.",
+    "upload.uploadFailed": "Upload fehlgeschlagen: {msg}",
     "upload.submit": "Verschlüsseln & Link erstellen",
     "upload.submitBusy": "Verschlüsseln…",
     "upload.shortcutHint": "Tipp: ⌘/Strg + Enter verschlüsselt",
@@ -112,6 +125,8 @@ const translations = {
     "badge.maxViews": "max. {n}×",
     "badge.recoverable": "wiederherstellbar",
     "badge.publicPreview": "öffentl. Vorschau",
+    "badge.protected": "Ansichtsschutz",
+    "protect.watermark": "Vertraulich · {date}",
     "success.secretNote.separate":
       "Der Schlüssel steckt nicht im Link — teile das Passwort über einen separaten Kanal.",
     "success.secretNote.inLink":
@@ -145,6 +160,7 @@ const translations = {
 
     // — Empfänger-Ansicht —
     "view.decrypting": "Entschlüssele…",
+    "view.downloading": "Herunterladen… {pct}%",
     "view.waiting": "verschlüsselt · wartet auf dich",
     "view.oneTimeWarn.pre": "Dieser Link kann ",
     "view.oneTimeWarn.bold": "nur einmal",
@@ -184,6 +200,13 @@ const translations = {
     "opened.oneTimeNote":
       "Das war die einzige Öffnung — lade dir jetzt, was du brauchst. Beim Neuladen ist der Link weg.",
     "opened.download": "Download",
+    "opened.copyImage": "Bild kopieren",
+    "opened.imgCopied": "Bild kopiert",
+    "opened.imgCopyFail": "Bild kopieren nicht möglich",
+    "opened.prevImage": "Vorheriges Bild",
+    "opened.nextImage": "Nächstes Bild",
+    "opened.protectNote": "Ansichtsgeschützt: Download/Kopieren ist deaktiviert. Hinweis: echter Screenshot-Schutz ist technisch nicht möglich.",
+    "opened.obscured": "Inhalt verborgen — Fenster ist nicht im Fokus.",
     "opened.shareOwn": "Eigene Datei verschlüsselt teilen →",
     "opened.decryptProgress": "Entschlüssele {done}/{total} …",
     "preview.loading": "Lade Vorschau…",
@@ -346,6 +369,7 @@ const translations = {
     "common.link.one": "link",
     "common.link.other": "links",
     "common.never": "Never",
+    "common.close": "Close",
 
     // — Upload —
     "upload.zkBadge": "Zero-knowledge · end-to-end",
@@ -380,6 +404,11 @@ const translations = {
     "upload.preview.warnBold": "unencrypted & publicly",
     "upload.preview.warnPost":
       " (visible to anyone with the link, even without the key). Only enable it if the image isn't confidential.",
+    "upload.compress.label": "Compress images",
+    "upload.compress.hint": "Shrink large images before encrypting (max 2560px, JPEG) — saves storage & upload time.",
+    "upload.protect.label": "View protection",
+    "upload.protect.hint": "Watermark + no download/right-click for the recipient; hides on focus loss.",
+    "upload.protect.warn": "Not real protection: OS-level screenshots can't be prevented technically — only made harder.",
     "upload.maxViews.label": "Limit views",
     "upload.maxViews.hint": "Auto-lock the link after N opens",
     "upload.maxViews.placeholder": "e.g. 5",
@@ -400,6 +429,13 @@ const translations = {
     "upload.expiry.7d": "7 days",
     "upload.expiry.custom": "Date",
     "upload.progress": "Encrypting {done}/{total} files…",
+    "upload.uploading": "Uploading… {pct}%",
+    "upload.speedEta": "{speed}/s · ~{eta} left",
+    "upload.cancel": "Cancel",
+    "upload.resume": "Resume",
+    "upload.discard": "Discard",
+    "upload.cancelled": "Upload cancelled — you can resume or discard.",
+    "upload.uploadFailed": "Upload failed: {msg}",
     "upload.submit": "Encrypt & create link",
     "upload.submitBusy": "Encrypting…",
     "upload.shortcutHint": "Tip: ⌘/Ctrl + Enter encrypts",
@@ -427,6 +463,8 @@ const translations = {
     "badge.maxViews": "max {n}×",
     "badge.recoverable": "recoverable",
     "badge.publicPreview": "public preview",
+    "badge.protected": "Protected",
+    "protect.watermark": "Confidential · {date}",
     "success.secretNote.separate":
       "The key isn't in the link — share the password through a separate channel.",
     "success.secretNote.inLink":
@@ -459,6 +497,7 @@ const translations = {
 
     // — Recipient view —
     "view.decrypting": "Decrypting…",
+    "view.downloading": "Downloading… {pct}%",
     "view.waiting": "encrypted · waiting for you",
     "view.oneTimeWarn.pre": "This link can be opened ",
     "view.oneTimeWarn.bold": "only once",
@@ -497,6 +536,13 @@ const translations = {
     "opened.oneTimeNote":
       "That was the only open — download what you need now. On reload the link is gone.",
     "opened.download": "Download",
+    "opened.copyImage": "Copy image",
+    "opened.imgCopied": "Image copied",
+    "opened.imgCopyFail": "Couldn't copy image",
+    "opened.prevImage": "Previous image",
+    "opened.nextImage": "Next image",
+    "opened.protectNote": "View-protected: download/copy is disabled. Note: true screenshot protection isn't technically possible.",
+    "opened.obscured": "Content hidden — window isn't focused.",
     "opened.shareOwn": "Share your own file encrypted →",
     "opened.decryptProgress": "Decrypting {done}/{total} …",
     "preview.loading": "Loading preview…",

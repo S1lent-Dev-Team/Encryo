@@ -17,7 +17,7 @@ import {
   useToast,
 } from "../components/ui.jsx";
 import { prepareSecret, encryptFileWith, makeVerifier, wrapSecret } from "../lib/crypto.js";
-import { createLink } from "../lib/store.js";
+import { startUpload, uploadChunks, completeUpload, uploadTotalChars } from "../lib/store.js";
 import { buildShareUrl } from "../lib/link.js";
 import { formatBytes, formatRelative } from "../lib/format.js";
 import { useCurrentUser } from "../lib/useAuth.js";
@@ -40,6 +40,39 @@ const nextId = () => ++_uid;
 function toLocalInput(d) {
   const pad = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// Restzeit menschenlesbar ("45 s" / "2:05 min").
+function fmtEta(sec) {
+  if (sec == null || !isFinite(sec)) return "…";
+  sec = Math.max(0, Math.ceil(sec));
+  if (sec < 60) return sec + " s";
+  const m = Math.floor(sec / 60);
+  return `${m}:${String(sec % 60).padStart(2, "0")} min`;
+}
+
+// Verkleinert große Bilder vor der Verschlüsselung (max. 2560px, JPEG ~0.85).
+// Gibt das Original zurück, wenn keine Ersparnis entsteht oder der Typ ungeeignet
+// ist (GIF/SVG bleiben unangetastet). Läuft komplett im Browser.
+async function compressImage(file, maxDim = 2560, quality = 0.85) {
+  if (!file.type.startsWith("image/")) return file;
+  if (file.type === "image/gif" || file.type === "image/svg+xml") return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, w, h);
+    bitmap.close?.();
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", quality));
+    if (!blob || blob.size >= file.size) return file; // keine Ersparnis -> Original
+    return new File([blob], file.name, { type: "image/jpeg" });
+  } catch {
+    return file;
+  }
 }
 
 // Erzeugt aus einem Bild ein verkleinertes JPEG-Thumbnail (base64) für die
@@ -76,20 +109,28 @@ export default function UploadPage() {
   const [limitMaxViews, setLimitMaxViews] = useState(p0.limitMaxViews);
   const [maxViews, setMaxViews] = useState("");
   const [publicPreview, setPublicPreview] = useState(false);
+  const [viewProtect, setViewProtect] = useState(p0.viewProtect);
+  const [compressImages, setCompressImages] = useState(p0.compressImages);
   const [recover, setRecover] = useState(false);
   const [accountPw, setAccountPw] = useState("");
 
-  const [status, setStatus] = useState("idle"); // idle | working | done
+  const [status, setStatus] = useState("idle"); // idle | working | paused | done
   const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const [uploadPct, setUploadPct] = useState(0);
+  const [uploadSpeed, setUploadSpeed] = useState(null); // Bytes/s
+  const [uploadEta, setUploadEta] = useState(null); // Sekunden
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
 
   const busyRef = useRef(false);
   const submitRef = useRef(() => {});
+  const abortRef = useRef(null); // AbortController des laufenden Uploads
+  const pendingRef = useRef(null); // Resume-Kontext { uploadId, payloads, opts, … }
+  const speedRef = useRef({ t: null, b: 0, ema: null });
 
   useEffect(() => {
-    savePrefs({ embedSecret, useExpiry, expiry, limitMaxViews, oneTime });
-  }, [embedSecret, useExpiry, expiry, limitMaxViews, oneTime]);
+    savePrefs({ embedSecret, useExpiry, expiry, limitMaxViews, oneTime, compressImages, viewProtect });
+  }, [embedSecret, useExpiry, expiry, limitMaxViews, oneTime, compressImages, viewProtect]);
 
   // Bilder/Dateien per Strg+V (Screenshot) und ⌘/Strg+Enter zum Verschlüsseln.
   useEffect(() => {
@@ -111,6 +152,17 @@ export default function UploadPage() {
       window.removeEventListener("keydown", onKey);
     };
   }, []);
+
+  // Vor versehentlichem Verlassen während Verschlüsselung/Upload warnen.
+  useEffect(() => {
+    if (status !== "working" && status !== "paused") return;
+    function onBeforeUnload(e) {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [status]);
 
   const isLoggedIn = !!user;
   const { free, hard } = limitsFor(isLoggedIn);
@@ -170,6 +222,7 @@ export default function UploadPage() {
       busyRef.current = true;
       setStatus("working");
       setProgress({ done: 0, total: items.length });
+      setUploadPct(0);
 
       // 0) Recovery-Key besorgen, falls Recovery aktiviert ist.
       let recoveryKey = null;
@@ -194,11 +247,20 @@ export default function UploadPage() {
 
       // 1) Link-Secret (Key bleibt im Browser)
       const { key, salt, fragment } = await prepareSecret(usePassword ? password : null);
-      // 2) Dateien lokal verschlüsseln (mit Fortschritt + ggf. umbenanntem Namen)
+      // 2) Dateien lokal verschlüsseln (optional vorher Bilder komprimieren)
       const payloads = [];
       for (const it of items) {
-        const p = await encryptFileWith(key, it.file);
-        p.filename = it.name?.trim() || it.file.name;
+        let file = it.file;
+        let name = it.name?.trim() || it.file.name;
+        if (compressImages) {
+          const c = await compressImage(it.file);
+          if (c !== it.file) {
+            file = c;
+            name = name.replace(/\.\w+$/, "") + ".jpg"; // Inhalt ist jetzt JPEG
+          }
+        }
+        const p = await encryptFileWith(key, file);
+        p.filename = name;
         payloads.push(p);
         setProgress((pr) => ({ ...pr, done: pr.done + 1 }));
       }
@@ -230,49 +292,113 @@ export default function UploadPage() {
         else hours = EXPIRY_OPTIONS.find((o) => o.key === expiry)?.hours ?? null;
       }
 
-      // 5) nur Ciphertext + Metadaten an den Server -> Server vergibt die ID
-      const { id, expiresAt } = await createLink({
-        files: payloads,
-        salt,
-        verifier,
-        oneTime,
-        expiresInHours: hours,
-        passwordProtected: usePassword,
-        maxViews: mv,
-        recovery,
-        preview,
-      });
-
-      // 6) Share-Link bauen (Key/Passwort steckt im #-Fragment, nie am Server)
+      // 5) Upload-Kontext bauen (erlaubt Abbrechen/Resume ohne neu zu verschlüsseln)
       const linkOpts = usePassword
         ? embedSecret
           ? { password }
           : {}
         : { key: fragment };
-      const url = buildShareUrl(id, linkOpts);
-
-      setResult({
-        id,
-        url,
-        usePassword,
-        embedSecret: usePassword ? embedSecret : true,
-        oneTime,
-        maxViews: mv,
-        recoverable: !!recovery,
-        publicPreview: !!preview,
-        fileCount: items.length,
-        totalSize,
-        imageFile: firstImage ? firstImage.file : null,
-        expiresAt: expiresAt ?? null,
-      });
-      setStatus("done");
+      const uploadId = await startUpload();
+      pendingRef.current = {
+        uploadId,
+        payloads,
+        opts: {
+          salt,
+          verifier,
+          oneTime,
+          expiresInHours: hours,
+          passwordProtected: usePassword,
+          maxViews: mv,
+          recovery,
+          preview,
+          protected: viewProtect,
+        },
+        linkOpts,
+        resultBase: {
+          usePassword,
+          embedSecret: usePassword ? embedSecret : true,
+          oneTime,
+          maxViews: mv,
+          recoverable: !!recovery,
+          publicPreview: !!preview,
+          protected: viewProtect,
+          fileCount: items.length,
+          totalSize,
+          imageFile: firstImage ? firstImage.file : null,
+        },
+        totalChars: uploadTotalChars(payloads),
+        totalBytes: totalSize,
+        from: undefined,
+      };
+      busyRef.current = false;
+      // 6) Chunks hochladen + abschließen (eigene Fehlerbehandlung in runUpload)
+      await runUpload();
     } catch (e) {
       console.error(e);
       setError(t("upload.err.encrypt", { msg: e?.message || e }));
       setStatus("idle");
+      busyRef.current = false;
+    }
+  }
+
+  // Lädt die (bereits verschlüsselten) Chunks hoch und schließt ab. Bei Abbruch
+  // oder Fehler -> Status "paused" mit Resume-Möglichkeit (kein Neu-Verschlüsseln).
+  async function runUpload() {
+    const ctx = pendingRef.current;
+    if (!ctx) return;
+    abortRef.current = new AbortController();
+    setError("");
+    setStatus("working");
+    busyRef.current = true;
+    speedRef.current = { t: performance.now(), b: null, ema: null };
+    const onProgress = (sentChars) => {
+      const frac = Math.min(1, sentChars / ctx.totalChars);
+      setUploadPct(frac);
+      const bytes = frac * ctx.totalBytes;
+      const r = speedRef.current;
+      const now = performance.now();
+      if (r.b == null) {
+        r.b = bytes;
+        r.t = now;
+        return;
+      }
+      const dt = (now - r.t) / 1000;
+      if (dt >= 0.25) {
+        const inst = (bytes - r.b) / dt;
+        r.ema = r.ema == null ? inst : r.ema * 0.6 + inst * 0.4;
+        r.t = now;
+        r.b = bytes;
+        setUploadSpeed(r.ema);
+        setUploadEta(r.ema > 0 ? (ctx.totalBytes - bytes) / r.ema : null);
+      }
+    };
+    try {
+      await uploadChunks(ctx.uploadId, ctx.payloads, {
+        signal: abortRef.current.signal,
+        onProgress,
+        from: ctx.from,
+      });
+      const { id, expiresAt } = await completeUpload(ctx.uploadId, ctx.opts);
+      setResult({ id, url: buildShareUrl(id, ctx.linkOpts), ...ctx.resultBase, expiresAt: expiresAt ?? null });
+      pendingRef.current = null;
+      setStatus("done");
+    } catch (e) {
+      ctx.from = e.position || ctx.from; // hier später fortsetzen
+      setUploadSpeed(null);
+      setUploadEta(null);
+      setStatus("paused");
+      setError(e.aborted ? t("upload.cancelled") : t("upload.uploadFailed", { msg: e.message }));
     } finally {
       busyRef.current = false;
     }
+  }
+
+  const cancelUpload = () => abortRef.current?.abort();
+  const resumeUpload = () => runUpload();
+  function discardUpload() {
+    abortRef.current?.abort();
+    pendingRef.current = null;
+    reset();
   }
 
   // Aktuellsten Handler in einen Ref spiegeln, damit das (einmal gebundene)
@@ -294,6 +420,10 @@ export default function UploadPage() {
     setResult(null);
     setError("");
     setProgress({ done: 0, total: 0 });
+    setUploadPct(0);
+    setUploadSpeed(null);
+    setUploadEta(null);
+    pendingRef.current = null;
     setStatus("idle");
   }
 
@@ -472,6 +602,33 @@ export default function UploadPage() {
             </div>
           )}
 
+          {firstImage && (
+            <Toggle
+              checked={compressImages}
+              onChange={setCompressImages}
+              icon={<Icon.image />}
+              label={t("upload.compress.label")}
+              hint={t("upload.compress.hint")}
+            />
+          )}
+
+          {firstImage && (
+            <div>
+              <Toggle
+                checked={viewProtect}
+                onChange={setViewProtect}
+                icon={<Icon.shield />}
+                label={t("upload.protect.label")}
+                hint={t("upload.protect.hint")}
+              />
+              {viewProtect && (
+                <p className="mt-2 rounded-lg border border-yellow-500/25 bg-yellow-500/10 px-3 py-2 text-[11px] text-yellow-200/90">
+                  {t("upload.protect.warn")}
+                </p>
+              )}
+            </div>
+          )}
+
           <div>
             <Toggle
               checked={limitMaxViews}
@@ -587,36 +744,72 @@ export default function UploadPage() {
           </div>
         )}
 
-        {status === "working" && progress.total > 0 && (
+        {(status === "working" || status === "paused") && (
           <div className="mt-4">
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-line-2">
               <div
-                className="h-full rounded-full bg-brand transition-all"
-                style={{ width: `${(progress.done / progress.total) * 100}%` }}
+                className={
+                  "h-full rounded-full transition-all " +
+                  (status === "paused" ? "bg-yellow-500" : "bg-brand")
+                }
+                style={{
+                  width: `${
+                    uploadPct > 0
+                      ? uploadPct * 100
+                      : progress.total
+                      ? (progress.done / progress.total) * 100
+                      : 0
+                  }%`,
+                }}
               />
             </div>
-            <p className="mt-1 text-xs text-muted">
-              {t("upload.progress", { done: progress.done, total: progress.total })}
+            <p className="mt-1 flex items-center justify-between text-xs text-muted">
+              <span>
+                {uploadPct > 0
+                  ? t("upload.uploading", { pct: Math.round(uploadPct * 100) })
+                  : t("upload.progress", { done: progress.done, total: progress.total })}
+              </span>
+              {status === "working" && uploadPct > 0 && uploadSpeed != null && (
+                <span className="text-faint">
+                  {t("upload.speedEta", {
+                    speed: formatBytes(uploadSpeed),
+                    eta: fmtEta(uploadEta),
+                  })}
+                </span>
+              )}
             </p>
           </div>
         )}
 
-        <Button
-          onClick={handleUpload}
-          disabled={status === "working" || items.length === 0 || blocked}
-          className="mt-5 w-full"
-        >
-          {status === "working" ? (
-            <>
-              <Spinner /> {t("upload.submitBusy")}
-            </>
-          ) : (
-            <>
+        {status === "paused" ? (
+          <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+            <Button onClick={resumeUpload} className="flex-1">
+              <Icon.upload /> {t("upload.resume")}
+            </Button>
+            <Button variant="ghost" onClick={discardUpload} className="flex-1 text-danger hover:bg-danger/10">
+              <Icon.x /> {t("upload.discard")}
+            </Button>
+          </div>
+        ) : status === "working" ? (
+          <Button
+            variant="outline"
+            onClick={cancelUpload}
+            className="mt-5 w-full text-danger hover:bg-danger/10"
+          >
+            <Icon.x /> {t("upload.cancel")}
+          </Button>
+        ) : (
+          <>
+            <Button
+              onClick={handleUpload}
+              disabled={items.length === 0 || blocked}
+              className="mt-5 w-full"
+            >
               <Icon.lock /> {t("upload.submit")}
-            </>
-          )}
-        </Button>
-        <p className="mt-2 text-center text-[11px] text-faint">{t("upload.shortcutHint")}</p>
+            </Button>
+            <p className="mt-2 text-center text-[11px] text-faint">{t("upload.shortcutHint")}</p>
+          </>
+        )}
       </Card>
     </div>
   );
@@ -720,6 +913,11 @@ function SuccessView({ result, onReset }) {
           {result.publicPreview && (
             <Badge>
               <Icon.image /> {t("badge.publicPreview")}
+            </Badge>
+          )}
+          {result.protected && (
+            <Badge tone="brand">
+              <Icon.shield /> {t("badge.protected")}
             </Badge>
           )}
           <Badge>

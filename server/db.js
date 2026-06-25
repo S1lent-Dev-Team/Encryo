@@ -98,6 +98,9 @@ ensureColumn("links", "recovery_ct", "TEXT");
 // (Discord/Slack). Opt-in pro Link — bewusst kein Zero-Knowledge-Inhalt.
 ensureColumn("links", "preview_mime", "TEXT");
 ensureColumn("links", "preview_data", "TEXT");
+// Ansichtsschutz (Abschreckung): Wasserzeichen + kein Download/Rechtsklick beim
+// Empfänger. KEIN echter Schutz — nur ein Hinweis-/Hürden-Flag.
+ensureColumn("links", "view_protect", "INTEGER NOT NULL DEFAULT 0");
 
 // --- IDs & Hashing ---------------------------------------------------------
 const ALPHABET = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -262,6 +265,7 @@ export function createLink({
   maxViews,
   recovery,
   preview,
+  protected: viewProtect,
 }) {
   const id = shortId();
   const now = Date.now();
@@ -278,8 +282,8 @@ export function createLink({
     db.prepare(
       `INSERT INTO links(id, owner_id, created_at, expires_at, one_time, burned,
         view_count, password_protected, salt, verifier_iv, verifier_ct,
-        max_views, recovery_iv, recovery_ct, preview_mime, preview_data)
-       VALUES(?,?,?,?,?,0,0,?,?,?,?,?,?,?,?,?)`
+        max_views, recovery_iv, recovery_ct, preview_mime, preview_data, view_protect)
+       VALUES(?,?,?,?,?,0,0,?,?,?,?,?,?,?,?,?,?)`
     ).run(
       id,
       ownerId || null,
@@ -294,7 +298,8 @@ export function createLink({
       rec?.iv || null,
       rec?.ciphertext || null,
       prev?.mime || null,
-      prev?.data || null
+      prev?.data || null,
+      viewProtect ? 1 : 0
     );
     const ins = db.prepare(
       "INSERT INTO files(link_id, pos, filename, size, mimetype, iv, ciphertext) VALUES(?,?,?,?,?,?,?)"
@@ -339,6 +344,7 @@ export function getLinkMeta(id) {
     // Verrät nur, DASS ein (verschlüsselter) Recovery-Vault existiert — nicht den Inhalt.
     recoverable: !!l.recovery_ct,
     hasPreview: !!l.preview_data,
+    protected: !!l.view_protect,
   };
 }
 

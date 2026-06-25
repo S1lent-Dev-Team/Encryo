@@ -63,6 +63,10 @@ So testest du den kompletten Flow:
 | ☑️ Bulk-Aktionen | mehrere Links im Dashboard markieren → sammelweise sperren/löschen |
 | 🔑 API-Tokens | für CLI/Skripte (voller Account-Zugriff), im Dashboard verwaltbar |
 | ⌨️ CLI | `bin/encryo.mjs` lädt zero-knowledge per Token hoch (Verschlüsselung lokal in Node) |
+| 🧩 Chunked Upload | Dateien werden in ≤6-MB-Häppchen hochgeladen → umgeht Proxy-Body-Limits (z.B. 100 MB) |
+| ⏯️ Upload-Steuerung | flüssiger %-Balken + Speed/Restzeit, **Abbrechen/Fortsetzen**, Auto-Retry pro Chunk (idempotent) |
+| 🖼️ Lightbox-Galerie | mehrere Bilder mit ◀ ▶ / Pfeiltasten durchblättern, **Bild in Zwischenablage kopieren** |
+| ⬇️ Download-Fortschritt | beim Öffnen großer Links: Herunterladen-% dann Entschlüsseln-% |
 
 ## Teilen & Vorschau (Discord & Co.)
 
@@ -192,6 +196,13 @@ entsprechend auf 750 MB gesetzt. Ciphertext von toten Links (verbrannt/gesperrt/
 abgelaufen) wird stündlich freigegeben (`reclaimDeadCiphertext`), Metadaten +
 Statistik bleiben erhalten.
 
+**Chunked Upload:** Große Dateien werden in ≤6-MB-Häppchen hochgeladen
+(`POST /api/uploads` → `…/:id/chunk` → `…/:id/complete`) und serverseitig
+zusammengesetzt. So reißt keine einzelne Anfrage das Body-Limit eines
+vorgelagerten Proxys/Tunnels (z.B. Cloudflare-Free: 100 MB) — der Auslöser für
+den früheren `HTTP 413` bei großen Uploads. Sessions liegen im Speicher (TTL
+30 min) und sind auf das Account-Hardlimit gedeckelt.
+
 ## Sicherheit & Betrieb
 
 - **Rate-Limiting** (In-Memory, [server/ratelimit.js](server/ratelimit.js)): Login/Register/Passwort
@@ -227,7 +238,7 @@ Tokens im Dashboard unter **API-Tokens** anlegen, dann zero-knowledge hochladen
 (Verschlüsselung läuft lokal in Node, der Server sieht nur Ciphertext):
 
 ```bash
-ENCRYO_SERVER=https://encryo.app ENCRYO_TOKEN=enc_… \
+ENCRYO_SERVER=https://encryo.s1lent.dev ENCRYO_TOKEN=enc_… \
   node bin/encryo.mjs upload bild.png --one-time
 ```
 

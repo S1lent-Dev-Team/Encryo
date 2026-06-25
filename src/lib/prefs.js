@@ -10,6 +10,8 @@ const DEFAULTS = {
   expiry: "24",
   limitMaxViews: false,
   oneTime: false,
+  compressImages: false,
+  viewProtect: false,
 };
 
 export function loadPrefs() {

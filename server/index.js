@@ -6,6 +6,7 @@ import cookieParser from "cookie-parser";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import * as db from "./db.js";
 import {
   checkUpload,
@@ -178,8 +179,9 @@ app.delete("/api/auth/tokens/:id", requireAuth, (req, res) => {
   res.json(db.deleteApiToken(req.params.id, req.user.id));
 });
 
-// ------- Link-Routen -------------------------------------------------------
-app.post("/api/links", createLimiter, (req, res) => {
+// ------- Gemeinsame Validierung + Link-Anlage ------------------------------
+// Genutzt vom Einmal-Upload (/api/links) UND vom Chunk-Abschluss.
+function finalizeLink(req, res, body) {
   const {
     files,
     salt,
@@ -190,7 +192,8 @@ app.post("/api/links", createLimiter, (req, res) => {
     maxViews,
     recovery,
     preview,
-  } = req.body || {};
+    protected: viewProtect,
+  } = body || {};
   if (!Array.isArray(files) || files.length === 0)
     return res.status(400).json({ error: "Keine Dateien." });
   for (const f of files) {
@@ -254,9 +257,87 @@ app.post("/api/links", createLimiter, (req, res) => {
     maxViews: Number.isInteger(maxViews) ? maxViews : null,
     recovery: recovery && recovery.iv && recovery.ciphertext ? recovery : null,
     preview: previewOk,
+    protected: !!viewProtect,
     ownerId: req.user ? req.user.id : null,
   });
   res.json({ id, expiresAt, forced: !!check.forced });
+}
+
+// ------- Chunked Upload ----------------------------------------------------
+// Umgeht Body-Limits vorgelagerter Proxys/Tunnel (z.B. 100 MB). Die Datei wird
+// in kleinen Häppchen hochgeladen und serverseitig zusammengesetzt.
+const uploadSessions = new Map(); // uploadId -> { createdAt, files: [], chars }
+const UPLOAD_SESSION_TTL = 30 * 60_000;
+const MAX_UPLOAD_CHARS = Math.ceil(LIMITS.account.hard * 1.4); // base64-Obergrenze (~Hardcap)
+
+function purgeUploadSessions() {
+  const cutoff = Date.now() - UPLOAD_SESSION_TTL;
+  for (const [id, s] of uploadSessions) if (s.createdAt < cutoff) uploadSessions.delete(id);
+}
+
+// ------- Link-Routen -------------------------------------------------------
+// Einmal-Upload (kleine Dateien / Abwärtskompatibilität).
+app.post("/api/links", createLimiter, (req, res) => finalizeLink(req, res, req.body || {}));
+
+// Chunked: Session anlegen -> Chunks anhängen -> abschließen.
+app.post("/api/uploads", createLimiter, (_req, res) => {
+  const uploadId = randomUUID();
+  uploadSessions.set(uploadId, { createdAt: Date.now(), files: [], chars: 0 });
+  res.json({ uploadId });
+});
+
+app.post("/api/uploads/:id/chunk", (req, res) => {
+  const s = uploadSessions.get(req.params.id);
+  if (!s) return res.status(404).json({ error: "Upload-Session unbekannt oder abgelaufen." });
+  const { fileIndex, chunkIndex, filename, size, mimetype, iv, chunk } = req.body || {};
+  if (
+    typeof fileIndex !== "number" || fileIndex < 0 ||
+    typeof chunkIndex !== "number" || chunkIndex < 0 ||
+    typeof chunk !== "string"
+  )
+    return res.status(400).json({ error: "Ungültiger Chunk." });
+  let f = s.files[fileIndex];
+  if (!f) {
+    f = s.files[fileIndex] = {
+      filename: String(filename || "datei"),
+      size: Number(size) || 0,
+      mimetype: typeof mimetype === "string" ? mimetype : "application/octet-stream",
+      iv: typeof iv === "string" ? iv : "",
+      chunks: [],
+    };
+  }
+  // Indexbasiert -> idempotent: ein erneut gesendeter Chunk überschreibt sich
+  // selbst (für Retry/Resume), ohne den Ciphertext zu verdoppeln.
+  const prev = f.chunks[chunkIndex] ? f.chunks[chunkIndex].length : 0;
+  s.chars += chunk.length - prev;
+  if (s.chars > MAX_UPLOAD_CHARS) {
+    uploadSessions.delete(req.params.id);
+    return res.status(413).json({ error: `Maximal ${formatBytes(LIMITS.account.hard)} pro Link.` });
+  }
+  f.chunks[chunkIndex] = chunk;
+  res.json({ ok: true });
+});
+
+app.post("/api/uploads/:id/complete", createLimiter, (req, res) => {
+  const s = uploadSessions.get(req.params.id);
+  if (!s) return res.status(404).json({ error: "Upload-Session unbekannt oder abgelaufen." });
+  // Chunks lückenlos zusammensetzen; fehlt einer -> Upload unvollständig.
+  const files = [];
+  for (const f of s.files) {
+    if (!f) continue;
+    for (let i = 0; i < f.chunks.length; i++)
+      if (f.chunks[i] == null)
+        return res.status(400).json({ error: "Upload unvollständig (fehlender Chunk)." });
+    files.push({
+      filename: f.filename,
+      size: f.size,
+      mimetype: f.mimetype,
+      iv: f.iv,
+      ciphertext: f.chunks.join(""),
+    });
+  }
+  uploadSessions.delete(req.params.id);
+  finalizeLink(req, res, { ...(req.body || {}), files });
 });
 
 app.get("/api/links/:id", (req, res) => {
@@ -418,6 +499,7 @@ if (SERVE_BUILD) {
 function maintenance() {
   db.purgeExpiredSessions();
   db.reclaimDeadCiphertext();
+  purgeUploadSessions();
 }
 maintenance();
 setInterval(maintenance, 3600_000).unref?.();
