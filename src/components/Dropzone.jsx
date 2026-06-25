@@ -1,9 +1,11 @@
 import { useRef, useState } from "react";
 import { Icon } from "./ui.jsx";
+import { useI18n } from "../lib/i18n.js";
 
 export default function Dropzone({ onFiles, disabled }) {
   const inputRef = useRef(null);
   const [over, setOver] = useState(false);
+  const { t } = useI18n();
 
   function handleDrop(e) {
     e.preventDefault();
@@ -44,12 +46,8 @@ export default function Dropzone({ onFiles, disabled }) {
       <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-lg border border-line bg-panel-2 text-muted">
         <Icon.upload />
       </div>
-      <p className="text-sm font-medium text-text">
-        Dateien hierher ziehen oder auswählen
-      </p>
-      <p className="mt-1 text-xs text-muted">
-        Mehrere Dateien werden als Collection unter einem Link gebündelt
-      </p>
+      <p className="text-sm font-medium text-text">{t("dropzone.title")}</p>
+      <p className="mt-1 text-xs text-muted">{t("dropzone.hint")}</p>
     </div>
   );
 }

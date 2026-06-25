@@ -62,9 +62,20 @@ db.exec(`
     ts INTEGER NOT NULL,
     FOREIGN KEY (link_id) REFERENCES links(id) ON DELETE CASCADE
   );
+  CREATE TABLE IF NOT EXISTS api_tokens (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    label TEXT,
+    created_at INTEGER NOT NULL,
+    last_used INTEGER,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
   CREATE INDEX IF NOT EXISTS idx_links_owner ON links(owner_id);
   CREATE INDEX IF NOT EXISTS idx_files_link ON files(link_id);
   CREATE INDEX IF NOT EXISTS idx_accesses_link ON accesses(link_id);
+  CREATE INDEX IF NOT EXISTS idx_tokens_user ON api_tokens(user_id);
+  CREATE INDEX IF NOT EXISTS idx_tokens_hash ON api_tokens(token_hash);
 `);
 
 // --- Migrationen -----------------------------------------------------------
@@ -83,6 +94,10 @@ ensureColumn("links", "revoked", "INTEGER NOT NULL DEFAULT 0");
 // Recovery-Vault: mit dem Account-Passwort verschlüsselte Kopie des Link-Secrets.
 ensureColumn("links", "recovery_iv", "TEXT");
 ensureColumn("links", "recovery_ct", "TEXT");
+// Optionale ÖFFENTLICHE (unverschlüsselte) Vorschau-Thumbnail für Unfurl-Embeds
+// (Discord/Slack). Opt-in pro Link — bewusst kein Zero-Knowledge-Inhalt.
+ensureColumn("links", "preview_mime", "TEXT");
+ensureColumn("links", "preview_data", "TEXT");
 
 // --- IDs & Hashing ---------------------------------------------------------
 const ALPHABET = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -162,18 +177,75 @@ export function createSession(userId) {
   return t;
 }
 
+// Sessions laufen serverseitig nach 30 Tagen ab (passend zum Cookie-maxAge).
+const SESSION_TTL_MS = 30 * 24 * 3600_000;
+
 export function getSessionUser(tok) {
   if (!tok) return null;
   const row = db
     .prepare(
-      "SELECT u.id, u.username, u.recovery_salt AS recoverySalt FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?"
+      "SELECT u.id, u.username, u.recovery_salt AS recoverySalt, s.created_at AS sessionCreated FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?"
     )
     .get(tok);
-  return row || null;
+  if (!row) return null;
+  // Abgelaufene Session sofort entwerten (und entfernen).
+  if (Date.now() - row.sessionCreated > SESSION_TTL_MS) {
+    deleteSession(tok);
+    return null;
+  }
+  return { id: row.id, username: row.username, recoverySalt: row.recoverySalt };
 }
 
 export function deleteSession(tok) {
   if (tok) db.prepare("DELETE FROM sessions WHERE token = ?").run(tok);
+}
+
+// Periodischer Cleanup: löscht abgelaufene Sessions (sonst wächst die Tabelle).
+export function purgeExpiredSessions() {
+  const cutoff = Date.now() - SESSION_TTL_MS;
+  return db.prepare("DELETE FROM sessions WHERE created_at < ?").run(cutoff).changes;
+}
+
+// --- API-Tokens ------------------------------------------------------------
+// Nur der SHA-256-Hash wird gespeichert; den Rohwert sieht der Nutzer einmalig
+// bei der Erstellung. Tokens authentisieren wie eine Session (voller Account).
+function sha256(s) {
+  return crypto.createHash("sha256").update(String(s)).digest("hex");
+}
+
+export function createApiToken(userId, label) {
+  const raw = "enc_" + crypto.randomBytes(24).toString("hex");
+  const id = uuid();
+  const now = Date.now();
+  db.prepare(
+    "INSERT INTO api_tokens(id, user_id, token_hash, label, created_at) VALUES(?,?,?,?,?)"
+  ).run(id, userId, sha256(raw), String(label || "").slice(0, 64) || null, now);
+  return { id, token: raw, label: label || null, createdAt: now };
+}
+
+export function listApiTokens(userId) {
+  return db
+    .prepare(
+      "SELECT id, label, created_at AS createdAt, last_used AS lastUsed FROM api_tokens WHERE user_id = ? ORDER BY created_at DESC"
+    )
+    .all(userId);
+}
+
+export function deleteApiToken(id, userId) {
+  const r = db.prepare("DELETE FROM api_tokens WHERE id = ? AND user_id = ?").run(id, userId);
+  return { ok: r.changes > 0 };
+}
+
+export function getUserByApiToken(rawToken) {
+  if (!rawToken) return null;
+  const row = db
+    .prepare(
+      "SELECT u.id, u.username, u.recovery_salt AS recoverySalt, t.id AS tokenId FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?"
+    )
+    .get(sha256(rawToken));
+  if (!row) return null;
+  db.prepare("UPDATE api_tokens SET last_used = ? WHERE id = ?").run(Date.now(), row.tokenId);
+  return { id: row.id, username: row.username, recoverySalt: row.recoverySalt };
 }
 
 // --- Links -----------------------------------------------------------------
@@ -189,6 +261,7 @@ export function createLink({
   ownerId,
   maxViews,
   recovery,
+  preview,
 }) {
   const id = shortId();
   const now = Date.now();
@@ -197,14 +270,16 @@ export function createLink({
   // den das verschlüsselte Secret gebunden ist).
   const rec = ownerId && recovery ? recovery : null;
   const maxV = Number.isInteger(maxViews) && maxViews > 0 ? maxViews : null;
+  // Öffentliche Vorschau ist opt-in und bewusst unverschlüsselt (Embed-Bild).
+  const prev = preview && preview.mime && preview.data ? preview : null;
 
   try {
     db.exec("BEGIN");
     db.prepare(
       `INSERT INTO links(id, owner_id, created_at, expires_at, one_time, burned,
         view_count, password_protected, salt, verifier_iv, verifier_ct,
-        max_views, recovery_iv, recovery_ct)
-       VALUES(?,?,?,?,?,0,0,?,?,?,?,?,?,?)`
+        max_views, recovery_iv, recovery_ct, preview_mime, preview_data)
+       VALUES(?,?,?,?,?,0,0,?,?,?,?,?,?,?,?,?)`
     ).run(
       id,
       ownerId || null,
@@ -217,7 +292,9 @@ export function createLink({
       verifier?.ciphertext || null,
       maxV,
       rec?.iv || null,
-      rec?.ciphertext || null
+      rec?.ciphertext || null,
+      prev?.mime || null,
+      prev?.data || null
     );
     const ins = db.prepare(
       "INSERT INTO files(link_id, pos, filename, size, mimetype, iv, ciphertext) VALUES(?,?,?,?,?,?,?)"
@@ -230,7 +307,7 @@ export function createLink({
     db.exec("ROLLBACK");
     throw e;
   }
-  return { id };
+  return { id, expiresAt };
 }
 
 function linkRow(id) {
@@ -261,7 +338,18 @@ export function getLinkMeta(id) {
     maxViews: l.max_views,
     // Verrät nur, DASS ein (verschlüsselter) Recovery-Vault existiert — nicht den Inhalt.
     recoverable: !!l.recovery_ct,
+    hasPreview: !!l.preview_data,
   };
+}
+
+// Öffentliche Vorschau-Thumbnail eines Links (unverschlüsselt, opt-in). Bewusst
+// ohne Owner-Check — sie ist als öffentliches Embed-Bild gedacht.
+export function getLinkPreview(id) {
+  const l = linkRow(id);
+  if (!l || !l.preview_data) return null;
+  // Bei gesperrten/verbrannten Links keine Vorschau mehr ausliefern.
+  if (l.revoked || l.burned || isExpired(l)) return null;
+  return { mime: l.preview_mime || "image/jpeg", data: l.preview_data };
 }
 
 // Atomar: erhöht view_count, brennt bei One-Time. WHERE burned=0 verhindert,
@@ -351,6 +439,38 @@ export function rewrapRecovery(ownerId, items) {
   return { updated };
 }
 
+// Speicher von "toten" Links freigeben: Ciphertext verbrannter/gesperrter/
+// abgelaufener Links kann nie wieder ausgeliefert werden (openLink lehnt sie ab),
+// ist also reiner Ballast. Wir leeren nur iv/ciphertext und behalten Metadaten
+// (Dateiname, Größe) + Statistik fürs Dashboard. Liefert die Anzahl geleerter Zeilen.
+export function reclaimDeadCiphertext() {
+  const now = Date.now();
+  return db
+    .prepare(
+      `UPDATE files SET ciphertext = '', iv = ''
+         WHERE ciphertext != '' AND link_id IN (
+           SELECT id FROM links
+             WHERE burned = 1 OR revoked = 1
+               OR (expires_at IS NOT NULL AND expires_at < ?)
+         )`
+    )
+    .run(now).changes;
+}
+
+// Aktueller Verbrauch eines Accounts (Anzahl Links + Gesamtgröße der Dateien) —
+// für die Account-Kontingente beim Anlegen neuer Links.
+export function ownerUsage(ownerId) {
+  const count = db
+    .prepare("SELECT COUNT(*) c FROM links WHERE owner_id = ?")
+    .get(ownerId).c;
+  const bytes = db
+    .prepare(
+      "SELECT COALESCE(SUM(f.size),0) s FROM files f JOIN links l ON l.id = f.link_id WHERE l.owner_id = ?"
+    )
+    .get(ownerId).s;
+  return { count, bytes };
+}
+
 export function listLinksByOwner(ownerId) {
   const rows = db
     .prepare("SELECT * FROM links WHERE owner_id = ? ORDER BY created_at DESC")
@@ -359,6 +479,9 @@ export function listLinksByOwner(ownerId) {
     const files = db
       .prepare("SELECT filename FROM files WHERE link_id = ? ORDER BY pos")
       .all(l.id);
+    const agg = db
+      .prepare("SELECT COUNT(*) c, COALESCE(SUM(size),0) s FROM files WHERE link_id = ?")
+      .get(l.id);
     const log = db
       .prepare("SELECT ts FROM accesses WHERE link_id = ? ORDER BY ts")
       .all(l.id)
@@ -372,6 +495,8 @@ export function listLinksByOwner(ownerId) {
       revoked: !!l.revoked,
       viewCount: l.view_count,
       maxViews: l.max_views,
+      fileCount: agg.c,
+      totalSize: agg.s,
       passwordProtected: !!l.password_protected,
       recoverable: !!l.recovery_ct,
       // Owner-only Endpoint -> der (verschlüsselte) Vault darf hier mitkommen,

@@ -6,19 +6,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Encryo – Ende-zu-Ende verschlüsseltes Datei-Hosting. Der Server sieht deine Dateien nie im Klartext." />
     <title>Encryo · verschlüsseltes Datei-Hosting</title>
-
-    <!-- Open Graph / Twitter: Domain-Unfurling (z.B. in Discord/Slack).
-         Pro-Link-Vorschau des Inhalts braucht das Backend (server-gerenderte
-         OG-Tags) – der Key im #-Fragment ist für Crawler unsichtbar. -->
-    <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="Encryo" />
-    <meta property="og:title" content="Encryo · verschlüsselt teilen" />
-    <meta property="og:description" content="Dateien werden im Browser verschlüsselt. Der Server sieht nur Ciphertext." />
-    <meta property="og:theme-color" content="#34d399" />
     <meta name="theme-color" content="#0a0b0d" />
-    <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="Encryo · verschlüsselt teilen" />
-    <meta name="twitter:description" content="Ende-zu-Ende verschlüsseltes Datei-Hosting." />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+
+    <!-- Theme früh anwenden (vor dem ersten Paint), damit kein Dunkel-Blitz beim
+         hellen Theme entsteht. Externe Datei wegen strikter CSP (kein inline-Script). -->
+    <script src="/theme-init.js"></script>
+
+    <!-- Open Graph / Twitter werden vom Server pro Seite injiziert (server/index.js).
+         Für /v/:id entstehen so echte Pro-Link-Unfurl-Karten in Discord/Slack;
+         ein optionales Embed-Bild nur, wenn der Uploader eine öffentliche
+         Vorschau aktiviert hat. -->
+    <!--OG-->
   </head>
   <body>
     <div id="root"></div>

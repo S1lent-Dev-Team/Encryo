@@ -26,7 +26,8 @@ async function req(path, opts = {}) {
 }
 
 // POST /api/links  — legt einen Link an, Server vergibt die ID.
-// opts: { files, salt, verifier, oneTime, expiresInHours, passwordProtected }
+// opts: { files, salt, verifier, oneTime, expiresInHours, passwordProtected,
+//         maxViews, recovery, preview }. Antwort: { id, expiresAt, forced }.
 export async function createLink(opts) {
   return req("/links", { method: "POST", body: JSON.stringify(opts) });
 }

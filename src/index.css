@@ -17,6 +17,25 @@
   --color-faint: #5b616b;
 }
 
+/* Helles Theme: überschreibt die CSS-Variablen (höhere Spezifität als :root von
+   @theme). Die Tailwind-Utilities lösen weiterhin var(--color-…) auf, ändern sich
+   also automatisch mit. Umschaltbar über data-theme="light" am <html>. */
+:root[data-theme="light"] {
+  --color-ink: #f6f7f9;
+  --color-panel: #ffffff;
+  --color-panel-2: #eef1f4;
+  --color-line: #e3e7ec;
+  --color-line-2: #d2d8df;
+  --color-brand: #0d9f6e;
+  --color-brand-2: #0891b2;
+  --color-brand-soft: #d1fae5;
+  --color-accent: #0d9f6e;
+  --color-danger: #dc2626;
+  --color-text: #1a1d21;
+  --color-muted: #596069;
+  --color-faint: #98a0aa;
+}
+
 html,
 body,
 #root {
@@ -38,6 +57,15 @@ body {
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* Dezentes Punkt-Grid im hellen Theme dunkel statt weiß. */
+:root[data-theme="light"] body {
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    rgba(0, 0, 0, 0.045) 1px,
+    transparent 0
+  );
 }
 
 ::selection {

@@ -9,7 +9,7 @@
     "build": "vite build",
     "server": "node --disable-warning=ExperimentalWarning server/index.js",
     "start": "node --disable-warning=ExperimentalWarning server/index.js",
-    "test": "node test/recovery.test.mjs"
+    "test": "node test/recovery.test.mjs && node test/limits.test.mjs && node test/ratelimit.test.mjs && node --disable-warning=ExperimentalWarning test/db.test.mjs"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",

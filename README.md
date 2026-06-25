@@ -51,8 +51,18 @@ So testest du den kompletten Flow:
 | 🔄 PW-Wechsel | Account-Passwort ändern → Recovery-Vaults werden clientseitig neu verschlüsselt (Re-Wrap) |
 | 🔗 Secret im Link | Key/Passwort optional im `#`-Fragment → Empfänger sieht Vorschau sofort |
 | 🖼️ Auto-Vorschau | Steckt das Secret im Link, wird (außer bei One-Time) ohne Klick entschlüsselt |
-| 💬 Unfurl-Vorschau | Discord-/Slack-Style Vorschaukarte zeigt, wie der Link beim Teilen aussieht |
-| 📱 QR-Code | Share-Link als QR (Lazy-geladen) im Erfolgs-Screen & Dashboard |
+| 👁️ Inhalts-Vorschau | Bild, PDF, Video, Audio & Text werden nach dem Entschlüsseln direkt angezeigt (Bild-Lightbox) |
+| 🗂️ Sammel-Download | Collections als **eine ZIP** herunterladen (clientseitig gepackt, ohne Dependency) |
+| 📋 Einfügen | Screenshots/Dateien per **Strg+V** aus der Zwischenablage hinzufügen |
+| 📤 Teilen | natives Share-Sheet (Web Share API) auf mobilen Geräten |
+| 💬 Embed-Vorschau | optionales **öffentliches** Thumbnail → echte Discord/Slack-Unfurl-Karte (server-OG) |
+| 📦 Speicher | 50 MB ohne Account, 100 MB mit Account (dauerhaft); größere Uploads mit 24-Std-Ablauf |
+| 📱 QR-Code | Share-Link als QR (Lazy-geladen) im Erfolgs-Screen & Dashboard, als PNG speicherbar |
+| ✏️ Dateien | vor dem Upload umbenennen & per ▲▼ sortieren |
+| 🗓️ Custom-Ablauf | Presets (1 Std/24 Std/7 Tage) **oder** freies Datum/Uhrzeit |
+| ☑️ Bulk-Aktionen | mehrere Links im Dashboard markieren → sammelweise sperren/löschen |
+| 🔑 API-Tokens | für CLI/Skripte (voller Account-Zugriff), im Dashboard verwaltbar |
+| ⌨️ CLI | `bin/encryo.mjs` lädt zero-knowledge per Token hoch (Verschlüsselung lokal in Node) |
 
 ## Teilen & Vorschau (Discord & Co.)
 
@@ -62,14 +72,18 @@ Beim Erstellen kann das Secret in den Link eingebettet werden:
 - **mit Passwort:** optional `#p.…` (Sofort-Vorschau) **oder** Secret weglassen
   und das Passwort über einen separaten Kanal teilen
 
-**Wichtiger Hinweis zur Discord-Vorschau:** Eine *echte* Unfurl-Vorschau des
-entschlüsselten Inhalts ist im Zero-Knowledge-Modell prinzipiell unmöglich –
-Discords Crawler führt kein JS aus und sieht das `#`-Fragment nie. Der Prototyp
-liefert deshalb (a) eine **In-App Unfurl-Vorschau** (`SharePreview`), die exakt
-zeigt, wie der Link aussieht, und (b) statische OG-/Twitter-Tags fürs
-Domain-Unfurling. Echte **pro-Link** OG-Previews brauchen das Backend, das
-serverseitig OG-Tags rendert – und sind dann eine bewusst *öffentliche* Vorschau
-(z.B. nur eine Thumbnail), nicht der geschützte Inhalt.
+**Discord-/Slack-Unfurl (server-seitig pro Link):** Der Server rendert für
+`/v/<id>` eigene Open-Graph-Tags (Titel, Größe, Schutz-Flags) – Discord & Co.
+zeigen so eine **echte Pro-Link-Karte**, ohne dass JS oder das `#`-Fragment nötig
+sind. Den verschlüsselten *Inhalt* kann der Crawler dabei nie sehen.
+
+Ein **Embed-Bild** ist beim Erstellen **opt-in** (Toggle „Öffentliche Vorschau"):
+Dann erzeugt der Browser ein verkleinertes Thumbnail des ersten Bildes und legt
+es **unverschlüsselt & öffentlich** ab (`/api/links/:id/preview`, als `og:image`).
+Das ist eine bewusste, klar gekennzeichnete Ausnahme vom Zero-Knowledge-Modell –
+nur für dieses eine Vorschaubild. Ohne Opt-in bleibt die Karte rein
+metadatenbasiert (kein Bild). Die In-App-Karte (`SharePreview`) zeigt vorab exakt,
+wie der Link beim Teilen aussieht.
 
 ## Krypto-Design (`src/lib/crypto.js`)
 
@@ -127,6 +141,9 @@ src/
     store.js    fetch(/api): createLink/getLinkMeta/openLink/deleteLink/revokeLink/getLinkRecovery
     auth.js     fetch(/api/auth): register/login/logout/fetchMe/changeAccountPassword (Cookie-Session)
     link.js     Share-URL bauen/lesen (Key/Passwort im #-Fragment)
+    limits.js   geteilte Upload-Limits (Client + Server)
+    zip.js      dependency-freier ZIP-Writer für den Sammel-Download
+    prefs.js    zuletzt genutzte UI-Optionen in localStorage (keine Secrets)
   components/   ui.jsx, Dropzone, SharePreview, QrCode
   pages/        UploadPage, ViewPage, DashboardPage, LoginPage
 data/           SQLite-DB (gitignored, persistiert auf Platte)
@@ -140,7 +157,8 @@ data/           SQLite-DB (gitignored, persistiert auf Platte)
 | `GET` | `/api/auth/me` | aktueller User (+ `recoverySalt`) |
 | `POST` | `/api/auth/password` | Account-Passwort ändern + re-wrapte Vaults speichern (Login nötig) |
 | `POST` | `/api/links` | Link anlegen (Ciphertext + Metadaten, optional `maxViews`/`recovery`) |
-| `GET` | `/api/links/:id` | Metadaten (ohne Ciphertext, nicht destruktiv; inkl. `recoverable`) |
+| `GET` | `/api/links/:id` | Metadaten (ohne Ciphertext, nicht destruktiv; inkl. `recoverable`, `hasPreview`) |
+| `GET` | `/api/links/:id/preview` | öffentliches Vorschau-Thumbnail (nur falls opt-in), z.B. als `og:image` |
 | `POST` | `/api/links/:id/open` | **atomar**: `view_count++`, bei One-Time/Max-Views `burned=1`, liefert Ciphertext |
 | `GET` | `/api/links/:id/recovery` | verschlüsselter Recovery-Vault (nur Owner) |
 | `POST` | `/api/links/:id/revoke` | Kill-Switch: Link sofort sperren (nur Owner) |
@@ -158,6 +176,88 @@ Datei-Passwort und den Klartext. Gespeichert werden nur Ciphertext + Metadaten
 ## Deployment (z.B. Railway)
 
 `npm run build && npm start`. Der Server hört auf `process.env.PORT`. Für
-persistente Daten ein Volume auf `DATA_DIR` (default `./data`) mounten. Für
-größere Dateien später `files.ciphertext` durch Supabase Storage / S3 ersetzen –
-betrifft nur `server/db.js`. Limit aktuell 25 MB pro Link.
+persistente Daten ein Volume auf `DATA_DIR` (default `./data`) mounten.
+
+**Speicher-Limits** (geteilt zwischen Client & Server in `src/lib/limits.js`):
+
+| | Freikontingent (dauerhaft) | darüber |
+|---|---|---|
+| ohne Account | 50 MB / Link | 50–100 MB: Ablauf autom. 24 Std · über 100 MB → Account nötig |
+| mit Account | 100 MB / Link | 100–500 MB: Ablauf autom. 24 Std · Gesamt-Kontingent 8 GB/Account |
+
+Der Ciphertext liegt aktuell als base64 in SQLite (`files.ciphertext`). Für
+großvolumigen Produktivbetrieb sollte das durch Object-Storage (Supabase / S3)
+ersetzt werden – betrifft nur `server/db.js`. Das JSON-Body-Limit des Servers ist
+entsprechend auf 750 MB gesetzt. Ciphertext von toten Links (verbrannt/gesperrt/
+abgelaufen) wird stündlich freigegeben (`reclaimDeadCiphertext`), Metadaten +
+Statistik bleiben erhalten.
+
+## Sicherheit & Betrieb
+
+- **Rate-Limiting** (In-Memory, [server/ratelimit.js](server/ratelimit.js)): Login/Register/Passwort
+  25 / 15 min, Link-Erstellung 40 / 10 min, Öffnen 120 / 10 min — je Client-IP.
+- **Session-Ablauf:** Sessions gelten 30 Tage; abgelaufene werden beim Zugriff
+  entwertet und stündlich aus der DB entfernt.
+- **Account-Kontingent:** max. 200 Links bzw. 1 GB gesamt pro Account
+  (`ACCOUNT_QUOTA` in `src/lib/limits.js`).
+- **Header:** strikte `Content-Security-Policy` (kein inline-Script — daher liegt
+  der Theme-Bootstrap als `public/theme-init.js` vor), `X-Content-Type-Options`,
+  `X-Frame-Options`, `Referrer-Policy: no-referrer`, `Permissions-Policy`.
+- **CSRF/Origin:** schreibende API-Aufrufe werden im Build-Betrieb gegen den
+  Host geprüft (zusätzlich zu `sameSite=lax`). Weitere erlaubte Origins via
+  `ALLOWED_ORIGINS` (CSV).
+
+## Tests & CI
+
+`npm test` führt vier Suiten aus (alle dependency-frei):
+
+- `test/recovery.test.mjs` — Recovery-Vault-Krypto-Round-Trip
+- `test/limits.test.mjs` — Upload-/Quota-Logik
+- `test/ratelimit.test.mjs` — Rate-Limiter-Middleware
+- `test/db.test.mjs` — Persistenz (createLink, One-Time/Max-Views-Burn,
+  Revoke/Delete-Owner-Checks, `ownerUsage`, `reclaimDeadCiphertext`, Sessions)
+  gegen eine frische Temp-DB (`DATA_DIR`).
+
+GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) baut + testet
+bei jedem Push/PR auf Node 24.
+
+## CLI (programmatische Uploads)
+
+Tokens im Dashboard unter **API-Tokens** anlegen, dann zero-knowledge hochladen
+(Verschlüsselung läuft lokal in Node, der Server sieht nur Ciphertext):
+
+```bash
+ENCRYO_SERVER=https://encryo.app ENCRYO_TOKEN=enc_… \
+  node bin/encryo.mjs upload bild.png --one-time
+```
+
+Optionen: `--password <pw>`, `--no-embed`, `--one-time`, `--max-views <n>`,
+`--expire <stunden>`. Der ausgegebene Link trägt den Schlüssel im `#`-Fragment.
+
+| Methode | Pfad | Zweck |
+|---|---|---|
+| `GET`/`POST`/`DELETE` | `/api/auth/tokens` | API-Tokens auflisten/erstellen/widerrufen (Login nötig) |
+
+Bei `POST /api/links` etc. authentisiert ein `Authorization: Bearer <token>`
+gleichwertig zur Cookie-Session.
+
+## Sprache & Theme
+
+Die Oberfläche ist **Deutsch/Englisch** (Umschalter im Header, Auswahl wird lokal
+gemerkt) und unterstützt ein **helles & dunkles Theme** (Sonne/Mond im Header,
+inkl. dynamischer `theme-color`). Auch die server-seitigen Unfurl-Tags richten
+sich nach `Accept-Language`.
+
+## PWA & Barrierefreiheit
+
+- **Installierbar / offline:** `public/manifest.webmanifest` + Service-Worker
+  (`public/sw.js`, nur im Production-Build registriert). Navigationen
+  network-first, gehashte `/assets/` cache-first, `/api` nie gecacht.
+- **Accessibility:** Toasts als `aria-live`-Region, die Bild-Lightbox ist ein
+  `role="dialog"` mit Fokus-Fang (Esc schließt, Fokus kehrt zurück).
+- **Mobil:** die Zeilen-Aktionen im Dashboard klappen auf kleinen Screens in ein
+  Kebab-Menü (⋮); auf Desktop bleibt die Button-Spalte.
+
+---
+
+Ein Projekt von **[S1lent](https://s1lent.dev)** · [s1lent.dev](https://s1lent.dev)

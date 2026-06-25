@@ -2,8 +2,10 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, Button, Input, Icon, Spinner } from "../components/ui.jsx";
 import { login, register } from "../lib/auth.js";
+import { useI18n } from "../lib/i18n.js";
 
 export default function LoginPage() {
+  const { t } = useI18n();
   const [mode, setMode] = useState("login"); // login | register
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -20,7 +22,7 @@ export default function LoginPage() {
       else await login(username, password);
       navigate("/dashboard");
     } catch (err) {
-      setError(err.message || "Fehlgeschlagen.");
+      setError(err.message || t("login.failed"));
     } finally {
       setBusy(false);
     }
@@ -30,30 +32,28 @@ export default function LoginPage() {
     <div className="mx-auto max-w-sm">
       <div className="mb-6 text-center">
         <h1 className="text-xl font-semibold tracking-tight">
-          {mode === "login" ? "Anmelden" : "Account erstellen"}
+          {mode === "login" ? t("login.signIn") : t("login.createAccount")}
         </h1>
-        <p className="mt-1 text-sm text-muted">
-          Verwalte deine Links an einem Ort.
-        </p>
+        <p className="mt-1 text-sm text-muted">{t("login.subtitle")}</p>
       </div>
 
       <Card className="animate-in p-5">
         <form onSubmit={submit} className="space-y-3">
           <div>
             <label className="mb-1.5 block text-xs font-medium text-muted">
-              Username
+              {t("login.username")}
             </label>
             <Input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="z.B. cellum"
+              placeholder={t("login.usernamePlaceholder")}
               autoFocus
               autoComplete="username"
             />
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-medium text-muted">
-              Passwort
+              {t("login.password")}
             </label>
             <Input
               type="password"
@@ -75,11 +75,11 @@ export default function LoginPage() {
               <Spinner />
             ) : mode === "login" ? (
               <>
-                <Icon.user /> Anmelden
+                <Icon.user /> {t("login.signIn")}
               </>
             ) : (
               <>
-                <Icon.plus /> Account erstellen
+                <Icon.plus /> {t("login.createAccount")}
               </>
             )}
           </Button>
@@ -87,7 +87,7 @@ export default function LoginPage() {
       </Card>
 
       <p className="mt-4 text-center text-sm text-muted">
-        {mode === "login" ? "Noch kein Account?" : "Schon registriert?"}{" "}
+        {mode === "login" ? t("login.noAccount") : t("login.haveAccount")}{" "}
         <button
           onClick={() => {
             setMode(mode === "login" ? "register" : "login");
@@ -95,13 +95,11 @@ export default function LoginPage() {
           }}
           className="text-brand hover:underline"
         >
-          {mode === "login" ? "Registrieren" : "Anmelden"}
+          {mode === "login" ? t("login.toRegister") : t("login.toLogin")}
         </button>
       </p>
 
-      <p className="mt-6 text-center text-[11px] text-faint">
-        Prototyp: Accounts liegen lokal im Browser, Passwort als PBKDF2-Hash.
-      </p>
+      <p className="mt-6 text-center text-[11px] text-faint">{t("login.footer")}</p>
     </div>
   );
 }

@@ -86,8 +86,9 @@ export function newSalt() {
   return bufToB64url(randomBytes(16));
 }
 
-// Passwort-Hash für das (Prototyp-)Account-System. PBKDF2 -> Bits (kein CryptoKey).
-// Im echten Backend würde das serverseitig mit Argon2/bcrypt passieren.
+// Optionaler clientseitiger Passwort-Hash (PBKDF2 -> Bits, kein CryptoKey).
+// Das Account-Login hasht serverseitig mit scrypt; diese Hilfsfunktion bleibt
+// für clientseitige Ableitungen verfügbar.
 export async function hashPassword(password, saltB64url) {
   const salt = b64urlToBuf(saltB64url);
   const baseKey = await crypto.subtle.importKey(

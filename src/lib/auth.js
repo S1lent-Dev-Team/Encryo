@@ -82,6 +82,26 @@ export async function changeAccountPassword(currentPassword, newPassword, rewrap
   return r;
 }
 
+// --- API-Tokens (für CLI/Skripte) ------------------------------------------
+export async function listTokens() {
+  const res = await fetch(API + "/tokens", { credentials: "same-origin" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function createToken(label) {
+  return post("/tokens", { label });
+}
+
+export async function deleteToken(id) {
+  const res = await fetch(API + "/tokens/" + encodeURIComponent(id), {
+    method: "DELETE",
+    credentials: "same-origin",
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 // Aktueller User laut Session-Cookie (oder null). Cached nebenbei das
 // Recovery-Salt (nicht geheim), damit Recovery nach Reload per Passwort-Eingabe
 // rekonstruiert werden kann.

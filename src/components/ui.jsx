@@ -1,6 +1,7 @@
 // ui.jsx — wiederverwendbare, bewusst zurückhaltende UI-Primitive.
 
-import { useState } from "react";
+import { createContext, useCallback, useContext, useState } from "react";
+import { useI18n } from "../lib/i18n.js";
 
 export function Card({ className = "", children }) {
   return (
@@ -52,6 +53,7 @@ export function Input(props) {
 // durch — ist also ein Drop-in-Ersatz für <Input type="password" />.
 export function PasswordInput({ className = "", ...props }) {
   const [show, setShow] = useState(false);
+  const { t } = useI18n();
   return (
     <div className="relative">
       <Input
@@ -63,7 +65,7 @@ export function PasswordInput({ className = "", ...props }) {
         type="button"
         onClick={() => setShow((v) => !v)}
         tabIndex={-1}
-        aria-label={show ? "Passwort verbergen" : "Passwort anzeigen"}
+        aria-label={show ? t("pw.hide") : t("pw.show")}
         className="absolute inset-y-0 right-0 flex items-center px-3 text-faint transition-colors hover:text-text"
       >
         {show ? <Icon.eyeOff /> : <Icon.eye />}
@@ -90,9 +92,9 @@ export function scorePassword(pw = "") {
 }
 
 export function PasswordStrength({ password = "" }) {
+  const { t } = useI18n();
   if (!password) return null;
   const score = scorePassword(password);
-  const labels = ["sehr schwach", "schwach", "okay", "stark", "sehr stark"];
   const colors = [
     "bg-danger",
     "bg-danger",
@@ -113,7 +115,9 @@ export function PasswordStrength({ password = "" }) {
           />
         ))}
       </div>
-      <p className="mt-1 text-[11px] text-muted">Passwortstärke: {labels[score]}</p>
+      <p className="mt-1 text-[11px] text-muted">
+        {t("pw.strength.label", { level: t(`pw.strength.${score}`) })}
+      </p>
     </div>
   );
 }
@@ -243,4 +247,66 @@ export const Icon = {
   key: make(<><circle cx="8" cy="15" r="4" /><path d="M10.8 12.2 20 3m-3 0 3 3m-6 0 2.5 2.5" /></>),
   ban: make(<><circle cx="12" cy="12" r="8.5" /><path d="m6 6 12 12" /></>),
   refresh: make(<><path d="M20 11a8 8 0 0 0-14.3-4.4M4 4v3.5H7.5" /><path d="M4 13a8 8 0 0 0 14.3 4.4M20 20v-3.5H16.5" /></>),
+  share: make(<><circle cx="6" cy="12" r="2.5" /><circle cx="17" cy="6" r="2.5" /><circle cx="17" cy="18" r="2.5" /><path d="m8.2 10.8 6.6-3.6M8.2 13.2l6.6 3.6" /></>),
+  search: make(<><circle cx="11" cy="11" r="6" /><path d="m20 20-3.6-3.6" /></>),
+  expand: make(<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />),
+  sun: make(<><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>),
+  moon: make(<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />),
+  chevronUp: make(<path d="m6 15 6-6 6 6" />),
+  chevronDown: make(<path d="m6 9 6 6 6-6" />),
+  pencil: make(<><path d="M4 20h4l10-10-4-4L4 16v4Z" /><path d="m13.5 6.5 4 4" /></>),
+  terminal: make(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>),
+  dots: make(
+    <>
+      <circle cx="12" cy="5" r="1.7" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="19" r="1.7" fill="currentColor" stroke="none" />
+    </>
+  ),
 };
+
+// ---- Toasts ---------------------------------------------------------------
+// Leichtgewichtiges, kontextbasiertes Toast-System. useToast() liefert eine
+// push(message, tone)-Funktion (tone: "success" | "error" | "default").
+const ToastContext = createContext(() => {});
+export const useToast = () => useContext(ToastContext);
+
+export function ToastProvider({ children }) {
+  const [toasts, setToasts] = useState([]);
+  const push = useCallback((message, tone = "success") => {
+    const id = Math.random().toString(36).slice(2);
+    setToasts((t) => [...t, { id, message, tone }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2600);
+  }, []);
+
+  const tones = {
+    success: "border-brand/30 bg-brand/15 text-brand",
+    error: "border-danger/30 bg-danger/15 text-danger",
+    default: "border-line-2 bg-panel-2 text-text",
+  };
+
+  return (
+    <ToastContext.Provider value={push}>
+      {children}
+      <div
+        aria-live="polite"
+        aria-atomic="false"
+        className="pointer-events-none fixed inset-x-0 bottom-5 z-50 flex flex-col items-center gap-2 px-4"
+      >
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            role="status"
+            className={
+              "animate-in flex items-center gap-2 rounded-lg border px-3.5 py-2 text-sm font-medium shadow-lg backdrop-blur " +
+              (tones[t.tone] || tones.default)
+            }
+          >
+            {t.tone === "error" ? <Icon.x size={15} /> : <Icon.check size={15} />}
+            {t.message}
+          </div>
+        ))}
+      </div>
+    </ToastContext.Provider>
+  );
+}
